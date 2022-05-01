@@ -1,0 +1,399 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: access-s3-
+  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.12, pipelines.kubeflow.org/pipeline_compilation_time: '2022-05-01T16:07:20.462194',
+    pipelines.kubeflow.org/pipeline_spec: '{"description": "A simple intro pipeline",
+      "inputs": [{"default": "ali-bucket-gerard", "name": "bucket_name", "optional":
+      true, "type": "String"}, {"default": "data/subset_images/", "name": "data_path_in_s3",
+      "optional": true, "type": "String"}, {"default": "/home/data/", "name": "out_path",
+      "optional": true, "type": "String"}, {"default": "us-east-1", "name": "AWS_REGION",
+      "optional": true, "type": "String"}], "name": "Access S3"}'}
+  labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.12}
+spec:
+  entrypoint: access-s3
+  templates:
+  - name: access-s3
+    inputs:
+      parameters:
+      - {name: AWS_REGION}
+      - {name: bucket_name}
+      - {name: data_path_in_s3}
+      - {name: out_path}
+    dag:
+      tasks:
+      - name: evaluation
+        template: evaluation
+        dependencies: [training]
+        arguments:
+          parameters:
+          - {name: AWS_REGION, value: '{{inputs.parameters.AWS_REGION}}'}
+          - {name: bucket_name, value: '{{inputs.parameters.bucket_name}}'}
+          - {name: data_path_in_s3, value: '{{inputs.parameters.data_path_in_s3}}'}
+          - {name: out_path, value: '{{inputs.parameters.out_path}}'}
+          - {name: training-feedback, value: '{{tasks.training.outputs.parameters.training-feedback}}'}
+      - {name: preprocessing, template: preprocessing}
+      - name: training
+        template: training
+        dependencies: [preprocessing]
+        arguments:
+          parameters:
+          - {name: AWS_REGION, value: '{{inputs.parameters.AWS_REGION}}'}
+          - {name: bucket_name, value: '{{inputs.parameters.bucket_name}}'}
+          - {name: data_path_in_s3, value: '{{inputs.parameters.data_path_in_s3}}'}
+          - {name: out_path, value: '{{inputs.parameters.out_path}}'}
+          - {name: preprocessing-feedback, value: '{{tasks.preprocessing.outputs.parameters.preprocessing-feedback}}'}
+  - name: evaluation
+    container:
+      args: [--msg, '{{inputs.parameters.training-feedback}}', --bucket-name, '{{inputs.parameters.bucket_name}}',
+        --data-path-in-s3, '{{inputs.parameters.data_path_in_s3}}', --out-path, '{{inputs.parameters.out_path}}',
+        --AWS-REGION, '{{inputs.parameters.AWS_REGION}}']
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def Evaluation( msg='no feedback', \n                bucket_name = 'ali-bucket-gerard',\n\
+        \                data_path_in_s3 = 'data/subset_images/',\n              \
+        \  out_path = '/home/data/',\n                AWS_REGION = 'us-east-1'):\n\
+        \n    print(msg)\n\n    import torch\n    import torch.utils.data\n    from\
+        \ torch.utils.data import DataLoader\n    from torchvision import transforms,\
+        \ datasets\n\n    import os\n    os.chdir(\"/home\")\n    import sys\n   \
+        \ sys.path.append('/home')\n    from functions import (evaluate, Net, read_s3_data,\
+        \ \n                            download_weights_from_s3, upload_to_s3)\n\n\
+        \    # Download dataser from s3 database\n    read_s3_data(data_path_in_s3,\
+        \ out_path, bucket_name, \n                    AWS_REGION, type='test')\n\n\
+        \    print(\"===============================================\")\n    print(\"\
+        Dataset has been downloaded.\")\n\n    dataset = datasets.ImageFolder( root=out_path,\n\
+        \                                    transform=transforms.Compose([\n    \
+        \                                            transforms.ToTensor(),\n    \
+        \                                            transforms.Normalize((0.485,\
+        \ 0.456, 0.406), \n                                                      \
+        \              (0.229, 0.224, 0.225)),\n                                 \
+        \               transforms.Resize((100, 100))\n                          \
+        \              ])\n                                    )\n    print(\"===============================================\"\
+        )\n    print(\"Dataset has been prepared.\")\n\n    evens = list(range(0,\
+        \ len(dataset), 2))\n    eval_set = torch.utils.data.Subset(dataset, evens)\n\
+        \n    eval_loader = DataLoader(eval_set, batch_size=100,\n               \
+        \                 shuffle=False, num_workers=2)\n\n    print(\"===============================================\"\
+        )\n    print(\"Dataloader has been prepared.\")\n\n    download_weights_from_s3(bucket_name,\
+        \ AWS_REGION, \n                                filename='mnist_model.pth')\n\
+        \n    print(\"===============================================\")\n    print(\"\
+        Weights are downloaded.\")\n\n    device = torch.device(\"cuda\" if False\
+        \ else \"cpu\")\n    model = Net().to(device)\n    model = Net()\n\n    model.load_state_dict(\
+        \ torch.load(\"/home/mnist_model.pth\"))\n\n    # Evaluation\n    filename\
+        \ = evaluate(model, device, eval_loader)\n\n    print(\"===============================================\"\
+        )\n    print(\"Evaluation is done.\")\n\n    upload_to_s3(bucket_name, AWS_REGION,\
+        \ filename=filename.split('/')[-1])\n\n    print(\"===============================================\"\
+        )\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Evaluation',\
+        \ description='')\n_parser.add_argument(\"--msg\", dest=\"msg\", type=str,\
+        \ required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--bucket-name\"\
+        , dest=\"bucket_name\", type=str, required=False, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--data-path-in-s3\", dest=\"data_path_in_s3\", type=str,\
+        \ required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--out-path\"\
+        , dest=\"out_path\", type=str, required=False, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--AWS-REGION\", dest=\"AWS_REGION\", type=str, required=False,\
+        \ default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n\
+        _outputs = Evaluation(**_parsed_args)\n"
+      image: 494280055936.dkr.ecr.us-east-1.amazonaws.com/ali-repo:latest
+    inputs:
+      parameters:
+      - {name: AWS_REGION}
+      - {name: bucket_name}
+      - {name: data_path_in_s3}
+      - {name: out_path}
+      - {name: training-feedback}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.12
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": [{"if": {"cond": {"isPresent": "msg"}, "then": ["--msg", {"inputValue":
+          "msg"}]}}, {"if": {"cond": {"isPresent": "bucket_name"}, "then": ["--bucket-name",
+          {"inputValue": "bucket_name"}]}}, {"if": {"cond": {"isPresent": "data_path_in_s3"},
+          "then": ["--data-path-in-s3", {"inputValue": "data_path_in_s3"}]}}, {"if":
+          {"cond": {"isPresent": "out_path"}, "then": ["--out-path", {"inputValue":
+          "out_path"}]}}, {"if": {"cond": {"isPresent": "AWS_REGION"}, "then": ["--AWS-REGION",
+          {"inputValue": "AWS_REGION"}]}}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def Evaluation( msg=''no feedback'', \n                bucket_name = ''ali-bucket-gerard'',\n                data_path_in_s3
+          = ''data/subset_images/'',\n                out_path = ''/home/data/'',\n                AWS_REGION
+          = ''us-east-1''):\n\n    print(msg)\n\n    import torch\n    import torch.utils.data\n    from
+          torch.utils.data import DataLoader\n    from torchvision import transforms,
+          datasets\n\n    import os\n    os.chdir(\"/home\")\n    import sys\n    sys.path.append(''/home'')\n    from
+          functions import (evaluate, Net, read_s3_data, \n                            download_weights_from_s3,
+          upload_to_s3)\n\n    # Download dataser from s3 database\n    read_s3_data(data_path_in_s3,
+          out_path, bucket_name, \n                    AWS_REGION, type=''test'')\n\n    print(\"===============================================\")\n    print(\"Dataset
+          has been downloaded.\")\n\n    dataset = datasets.ImageFolder( root=out_path,\n                                    transform=transforms.Compose([\n                                                transforms.ToTensor(),\n                                                transforms.Normalize((0.485,
+          0.456, 0.406), \n                                                                    (0.229,
+          0.224, 0.225)),\n                                                transforms.Resize((100,
+          100))\n                                        ])\n                                    )\n    print(\"===============================================\")\n    print(\"Dataset
+          has been prepared.\")\n\n    evens = list(range(0, len(dataset), 2))\n    eval_set
+          = torch.utils.data.Subset(dataset, evens)\n\n    eval_loader = DataLoader(eval_set,
+          batch_size=100,\n                                shuffle=False, num_workers=2)\n\n    print(\"===============================================\")\n    print(\"Dataloader
+          has been prepared.\")\n\n    download_weights_from_s3(bucket_name, AWS_REGION,
+          \n                                filename=''mnist_model.pth'')\n\n    print(\"===============================================\")\n    print(\"Weights
+          are downloaded.\")\n\n    device = torch.device(\"cuda\" if False else \"cpu\")\n    model
+          = Net().to(device)\n    model = Net()\n\n    model.load_state_dict( torch.load(\"/home/mnist_model.pth\"))\n\n    #
+          Evaluation\n    filename = evaluate(model, device, eval_loader)\n\n    print(\"===============================================\")\n    print(\"Evaluation
+          is done.\")\n\n    upload_to_s3(bucket_name, AWS_REGION, filename=filename.split(''/'')[-1])\n\n    print(\"===============================================\")\n\nimport
+          argparse\n_parser = argparse.ArgumentParser(prog=''Evaluation'', description='''')\n_parser.add_argument(\"--msg\",
+          dest=\"msg\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--bucket-name\",
+          dest=\"bucket_name\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--data-path-in-s3\",
+          dest=\"data_path_in_s3\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--out-path\",
+          dest=\"out_path\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--AWS-REGION\",
+          dest=\"AWS_REGION\", type=str, required=False, default=argparse.SUPPRESS)\n_parsed_args
+          = vars(_parser.parse_args())\n\n_outputs = Evaluation(**_parsed_args)\n"],
+          "image": "494280055936.dkr.ecr.us-east-1.amazonaws.com/ali-repo:latest"}},
+          "inputs": [{"default": "no feedback", "name": "msg", "optional": true, "type":
+          "String"}, {"default": "ali-bucket-gerard", "name": "bucket_name", "optional":
+          true, "type": "String"}, {"default": "data/subset_images/", "name": "data_path_in_s3",
+          "optional": true, "type": "String"}, {"default": "/home/data/", "name":
+          "out_path", "optional": true, "type": "String"}, {"default": "us-east-1",
+          "name": "AWS_REGION", "optional": true, "type": "String"}], "name": "Evaluation"}',
+        pipelines.kubeflow.org/component_ref: '{}', pipelines.kubeflow.org/arguments.parameters: '{"AWS_REGION":
+          "{{inputs.parameters.AWS_REGION}}", "bucket_name": "{{inputs.parameters.bucket_name}}",
+          "data_path_in_s3": "{{inputs.parameters.data_path_in_s3}}", "msg": "{{inputs.parameters.training-feedback}}",
+          "out_path": "{{inputs.parameters.out_path}}"}'}
+  - name: preprocessing
+    container:
+      args: ['----output-paths', /tmp/outputs/feedback/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def Preprocessing():\n\n    # You should upload your dataset to s3\n\n  \
+        \  # import os\n    # import boto3\n\n    # conn_s3 = boto3.client('s3', region_name=AWS_REGION)\n\
+        \n    # # Images names list\n    # filenames = os.listdir(data_path)\n\n \
+        \   # # Upload all images to s3\n    # for filename in filenames:\n    # \
+        \    conn_s3.upload_file(os.path.join(data_path, filename), \n    #      \
+        \                   bucket_name, \n    #                         os.path.join(output_path,\
+        \ filename))\n\n    from collections import namedtuple\n    feedback_msg =\
+        \ 'Done! Data are on S3.'\n    func_output = namedtuple('MyOutput', ['feedback'])\n\
+        \    return func_output(feedback_msg)\n\ndef _serialize_str(str_value: str)\
+        \ -> str:\n    if not isinstance(str_value, str):\n        raise TypeError('Value\
+        \ \"{}\" has type \"{}\" instead of str.'.format(\n            str(str_value),\
+        \ str(type(str_value))))\n    return str_value\n\nimport argparse\n_parser\
+        \ = argparse.ArgumentParser(prog='Preprocessing', description='')\n_parser.add_argument(\"\
+        ----output-paths\", dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args\
+        \ = vars(_parser.parse_args())\n_output_files = _parsed_args.pop(\"_output_paths\"\
+        , [])\n\n_outputs = Preprocessing(**_parsed_args)\n\n_output_serializers =\
+        \ [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n\
+        \    try:\n        os.makedirs(os.path.dirname(output_file))\n    except OSError:\n\
+        \        pass\n    with open(output_file, 'w') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"
+      image: 494280055936.dkr.ecr.us-east-1.amazonaws.com/ali-repo:latest
+    outputs:
+      parameters:
+      - name: preprocessing-feedback
+        valueFrom: {path: /tmp/outputs/feedback/data}
+      artifacts:
+      - {name: preprocessing-feedback, path: /tmp/outputs/feedback/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.12
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["----output-paths", {"outputPath": "feedback"}], "command": ["sh",
+          "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def Preprocessing():\n\n    # You should
+          upload your dataset to s3\n\n    # import os\n    # import boto3\n\n    #
+          conn_s3 = boto3.client(''s3'', region_name=AWS_REGION)\n\n    # # Images
+          names list\n    # filenames = os.listdir(data_path)\n\n    # # Upload all
+          images to s3\n    # for filename in filenames:\n    #     conn_s3.upload_file(os.path.join(data_path,
+          filename), \n    #                         bucket_name, \n    #                         os.path.join(output_path,
+          filename))\n\n    from collections import namedtuple\n    feedback_msg =
+          ''Done! Data are on S3.''\n    func_output = namedtuple(''MyOutput'', [''feedback''])\n    return
+          func_output(feedback_msg)\n\ndef _serialize_str(str_value: str) -> str:\n    if
+          not isinstance(str_value, str):\n        raise TypeError(''Value \"{}\"
+          has type \"{}\" instead of str.''.format(\n            str(str_value), str(type(str_value))))\n    return
+          str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Preprocessing'',
+          description='''')\n_parser.add_argument(\"----output-paths\", dest=\"_output_paths\",
+          type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = Preprocessing(**_parsed_args)\n\n_output_serializers
+          = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "494280055936.dkr.ecr.us-east-1.amazonaws.com/ali-repo:latest"}},
+          "name": "Preprocessing", "outputs": [{"name": "feedback", "type": "String"}]}',
+        pipelines.kubeflow.org/component_ref: '{}'}
+  - name: training
+    container:
+      args: [--msg, '{{inputs.parameters.preprocessing-feedback}}', --bucket-name,
+        '{{inputs.parameters.bucket_name}}', --data-path-in-s3, '{{inputs.parameters.data_path_in_s3}}',
+        --out-path, '{{inputs.parameters.out_path}}', --AWS-REGION, '{{inputs.parameters.AWS_REGION}}',
+        '----output-paths', /tmp/outputs/feedback/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def Training(   msg,\n                bucket_name = 'ali-bucket-gerard',\n\
+        \                data_path_in_s3 = 'data/subset_images/',\n              \
+        \  out_path = '/home/data/',\n                AWS_REGION = 'us-east-1'):\n\
+        \    \"\"\" \n    Download images data from s3 on your machine\n    Parameters:\n\
+        \        - bucket_name : str, name of the bucket\n        - data_path_in_s3:\
+        \ str, path of data on S3\n    \"\"\"\n\n    # It is mandotory to put necessary\
+        \ libraries here\n    import torch\n    import torch.utils.data\n    import\
+        \ torch.optim as optim\n    from torch.utils.data import DataLoader\n    from\
+        \ torch.optim.lr_scheduler import StepLR\n    from torchvision import transforms,\
+        \ datasets\n\n    import os\n    os.chdir(\"/home\")\n    import sys\n   \
+        \ sys.path.append('/home')\n    from functions import ( myParser, Net, train,\
+        \ test, \n                            read_s3_data, upload_to_s3 )\n\n   \
+        \ print(msg)\n\n    # Download dataser from s3 database\n    read_s3_data(data_path_in_s3,\
+        \ out_path, bucket_name, \n                    AWS_REGION, type='train')\n\
+        \n    print(\"===============================================\")\n    print(\"\
+        Dataset has been downloaded.\")\n\n    args = myParser()\n    use_cuda = not\
+        \ args.no_cuda and torch.cuda.is_available()\n    torch.manual_seed(args.seed)\n\
+        \n    dataset = datasets.ImageFolder( root=out_path,\n                   \
+        \                 transform=transforms.Compose([\n                       \
+        \                         transforms.ToTensor(),\n                       \
+        \                         transforms.Normalize((0.485, 0.456, 0.406), \n \
+        \                                                                   (0.229,\
+        \ 0.224, 0.225)),\n                                                transforms.Resize((100,\
+        \ 100))\n                                        ])\n                    \
+        \                )\n    print(\"===============================================\"\
+        )\n    print(\"Dataset has been prepared.\")\n\n    evens = list(range(0,\
+        \ len(dataset), 2))\n    odds = list(range(1, len(dataset), 2))\n    train_set\
+        \ = torch.utils.data.Subset(dataset, evens)\n    test_set = torch.utils.data.Subset(dataset,\
+        \ odds)\n\n    train_loader = DataLoader(train_set, batch_size=args.batch_size,\n\
+        \                                shuffle=True, num_workers=2)\n    test_loader\
+        \ = DataLoader(test_set, batch_size=args.test_batch_size,\n              \
+        \                  shuffle=False, num_workers=2)\n\n    print(\"===============================================\"\
+        )\n    print(\"Dataloader has been prepared.\")\n\n    device = torch.device(\"\
+        cuda\" if use_cuda else \"cpu\")\n    model = Net().to(device)\n\n    optimizer\
+        \ = optim.Adadelta(model.parameters(), lr=args.lr)\n    scheduler = StepLR(optimizer,\
+        \ step_size=1, gamma=args.gamma)\n\n    print(\"===============================================\"\
+        )\n    print(\"model, optimizer and sheduler have been defined.\")\n\n   \
+        \ for epoch in range(1, args.epochs + 1):\n        print(epoch)\n        train(args,\
+        \ model, device, train_loader, optimizer, epoch)\n        test(args, model,\
+        \ device, test_loader)\n        scheduler.step()\n\n    if True: #args.save_model:\n\
+        \        torch.save(model.state_dict(), \"/home/mnist_model.pth\")\n\n   \
+        \ print(\"===============================================\")\n    print(\"\
+        Training Done.\")\n\n    upload_to_s3(bucket_name, AWS_REGION, filename='mnist_model.pth')\n\
+        \n    print(\"===============================================\")\n    print(\"\
+        weights have been uploaded to s3.\")\n\n    from collections import namedtuple\n\
+        \    feedback_msg = 'Done! Model is saved on s3.'\n    func_output = namedtuple('MyOutput',\
+        \ ['feedback'])\n    return func_output(feedback_msg)\n\ndef _serialize_str(str_value:\
+        \ str) -> str:\n    if not isinstance(str_value, str):\n        raise TypeError('Value\
+        \ \"{}\" has type \"{}\" instead of str.'.format(\n            str(str_value),\
+        \ str(type(str_value))))\n    return str_value\n\nimport argparse\n_parser\
+        \ = argparse.ArgumentParser(prog='Training', description='Download images\
+        \ data from s3 on your machine')\n_parser.add_argument(\"--msg\", dest=\"\
+        msg\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --bucket-name\", dest=\"bucket_name\", type=str, required=False, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--data-path-in-s3\", dest=\"data_path_in_s3\", type=str,\
+        \ required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--out-path\"\
+        , dest=\"out_path\", type=str, required=False, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--AWS-REGION\", dest=\"AWS_REGION\", type=str, required=False,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\", dest=\"\
+        _output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n\
+        _output_files = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = Training(**_parsed_args)\n\
+        \n_output_serializers = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx,\
+        \ output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n\
+        \    except OSError:\n        pass\n    with open(output_file, 'w') as f:\n\
+        \        f.write(_output_serializers[idx](_outputs[idx]))\n"
+      image: 494280055936.dkr.ecr.us-east-1.amazonaws.com/ali-repo:latest
+    inputs:
+      parameters:
+      - {name: AWS_REGION}
+      - {name: bucket_name}
+      - {name: data_path_in_s3}
+      - {name: out_path}
+      - {name: preprocessing-feedback}
+    outputs:
+      parameters:
+      - name: training-feedback
+        valueFrom: {path: /tmp/outputs/feedback/data}
+      artifacts:
+      - {name: training-feedback, path: /tmp/outputs/feedback/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.12
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Download
+          images data from s3 on your machine", "implementation": {"container": {"args":
+          ["--msg", {"inputValue": "msg"}, {"if": {"cond": {"isPresent": "bucket_name"},
+          "then": ["--bucket-name", {"inputValue": "bucket_name"}]}}, {"if": {"cond":
+          {"isPresent": "data_path_in_s3"}, "then": ["--data-path-in-s3", {"inputValue":
+          "data_path_in_s3"}]}}, {"if": {"cond": {"isPresent": "out_path"}, "then":
+          ["--out-path", {"inputValue": "out_path"}]}}, {"if": {"cond": {"isPresent":
+          "AWS_REGION"}, "then": ["--AWS-REGION", {"inputValue": "AWS_REGION"}]}},
+          "----output-paths", {"outputPath": "feedback"}], "command": ["sh", "-ec",
+          "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def Training(   msg,\n                bucket_name
+          = ''ali-bucket-gerard'',\n                data_path_in_s3 = ''data/subset_images/'',\n                out_path
+          = ''/home/data/'',\n                AWS_REGION = ''us-east-1''):\n    \"\"\"
+          \n    Download images data from s3 on your machine\n    Parameters:\n        -
+          bucket_name : str, name of the bucket\n        - data_path_in_s3: str, path
+          of data on S3\n    \"\"\"\n\n    # It is mandotory to put necessary libraries
+          here\n    import torch\n    import torch.utils.data\n    import torch.optim
+          as optim\n    from torch.utils.data import DataLoader\n    from torch.optim.lr_scheduler
+          import StepLR\n    from torchvision import transforms, datasets\n\n    import
+          os\n    os.chdir(\"/home\")\n    import sys\n    sys.path.append(''/home'')\n    from
+          functions import ( myParser, Net, train, test, \n                            read_s3_data,
+          upload_to_s3 )\n\n    print(msg)\n\n    # Download dataser from s3 database\n    read_s3_data(data_path_in_s3,
+          out_path, bucket_name, \n                    AWS_REGION, type=''train'')\n\n    print(\"===============================================\")\n    print(\"Dataset
+          has been downloaded.\")\n\n    args = myParser()\n    use_cuda = not args.no_cuda
+          and torch.cuda.is_available()\n    torch.manual_seed(args.seed)\n\n    dataset
+          = datasets.ImageFolder( root=out_path,\n                                    transform=transforms.Compose([\n                                                transforms.ToTensor(),\n                                                transforms.Normalize((0.485,
+          0.456, 0.406), \n                                                                    (0.229,
+          0.224, 0.225)),\n                                                transforms.Resize((100,
+          100))\n                                        ])\n                                    )\n    print(\"===============================================\")\n    print(\"Dataset
+          has been prepared.\")\n\n    evens = list(range(0, len(dataset), 2))\n    odds
+          = list(range(1, len(dataset), 2))\n    train_set = torch.utils.data.Subset(dataset,
+          evens)\n    test_set = torch.utils.data.Subset(dataset, odds)\n\n    train_loader
+          = DataLoader(train_set, batch_size=args.batch_size,\n                                shuffle=True,
+          num_workers=2)\n    test_loader = DataLoader(test_set, batch_size=args.test_batch_size,\n                                shuffle=False,
+          num_workers=2)\n\n    print(\"===============================================\")\n    print(\"Dataloader
+          has been prepared.\")\n\n    device = torch.device(\"cuda\" if use_cuda
+          else \"cpu\")\n    model = Net().to(device)\n\n    optimizer = optim.Adadelta(model.parameters(),
+          lr=args.lr)\n    scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)\n\n    print(\"===============================================\")\n    print(\"model,
+          optimizer and sheduler have been defined.\")\n\n    for epoch in range(1,
+          args.epochs + 1):\n        print(epoch)\n        train(args, model, device,
+          train_loader, optimizer, epoch)\n        test(args, model, device, test_loader)\n        scheduler.step()\n\n    if
+          True: #args.save_model:\n        torch.save(model.state_dict(), \"/home/mnist_model.pth\")\n\n    print(\"===============================================\")\n    print(\"Training
+          Done.\")\n\n    upload_to_s3(bucket_name, AWS_REGION, filename=''mnist_model.pth'')\n\n    print(\"===============================================\")\n    print(\"weights
+          have been uploaded to s3.\")\n\n    from collections import namedtuple\n    feedback_msg
+          = ''Done! Model is saved on s3.''\n    func_output = namedtuple(''MyOutput'',
+          [''feedback''])\n    return func_output(feedback_msg)\n\ndef _serialize_str(str_value:
+          str) -> str:\n    if not isinstance(str_value, str):\n        raise TypeError(''Value
+          \"{}\" has type \"{}\" instead of str.''.format(\n            str(str_value),
+          str(type(str_value))))\n    return str_value\n\nimport argparse\n_parser
+          = argparse.ArgumentParser(prog=''Training'', description=''Download images
+          data from s3 on your machine'')\n_parser.add_argument(\"--msg\", dest=\"msg\",
+          type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--bucket-name\",
+          dest=\"bucket_name\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--data-path-in-s3\",
+          dest=\"data_path_in_s3\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--out-path\",
+          dest=\"out_path\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--AWS-REGION\",
+          dest=\"AWS_REGION\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = Training(**_parsed_args)\n\n_output_serializers
+          = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "494280055936.dkr.ecr.us-east-1.amazonaws.com/ali-repo:latest"}},
+          "inputs": [{"name": "msg", "type": "String"}, {"default": "ali-bucket-gerard",
+          "name": "bucket_name", "optional": true, "type": "String"}, {"default":
+          "data/subset_images/", "name": "data_path_in_s3", "optional": true, "type":
+          "String"}, {"default": "/home/data/", "name": "out_path", "optional": true,
+          "type": "String"}, {"default": "us-east-1", "name": "AWS_REGION", "optional":
+          true, "type": "String"}], "name": "Training", "outputs": [{"name": "feedback",
+          "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}', pipelines.kubeflow.org/arguments.parameters: '{"AWS_REGION":
+          "{{inputs.parameters.AWS_REGION}}", "bucket_name": "{{inputs.parameters.bucket_name}}",
+          "data_path_in_s3": "{{inputs.parameters.data_path_in_s3}}", "msg": "{{inputs.parameters.preprocessing-feedback}}",
+          "out_path": "{{inputs.parameters.out_path}}"}'}
+  arguments:
+    parameters:
+    - {name: bucket_name, value: ali-bucket-gerard}
+    - {name: data_path_in_s3, value: data/subset_images/}
+    - {name: out_path, value: /home/data/}
+    - {name: AWS_REGION, value: us-east-1}
+  serviceAccountName: pipeline-runner
